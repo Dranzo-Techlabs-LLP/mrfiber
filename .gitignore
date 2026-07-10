@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# env / secrets
+.env
+**/.env
+*.local
+
+# build output
+dist/
+**/dist/
+build/
+
+# logs
+*.log
+npm-debug.log*
+
+# release artifacts
+*.zip
+
+# os
+.DS_Store
