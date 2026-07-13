@@ -8,6 +8,36 @@ const db = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Detect binary assets by magic number, independent of the (often wrong or
+// missing) Content-Type header. Many embedded OLT httpds serve dynamically
+// generated images — captchas especially, which are usually CGI scripts —
+// with Content-Type: text/html or no type at all. A real browser hitting the
+// device directly just content-sniffs the bytes and renders the image; but our
+// tunnel's response interceptor keys off Content-Type, so a captcha mislabeled
+// as text/html gets run through .toString('utf8') + HTML rewriting + shim
+// injection, which shreds the binary and leaves a blank <img>. Sniffing the
+// actual bytes here lets us pass true binaries through untouched.
+function looksLikeBinaryAsset(buf) {
+    if (!buf || buf.length < 4) return false;
+    const b = buf;
+    // PNG  89 50 4E 47
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return true;
+    // JPEG FF D8 FF
+    if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return true;
+    // GIF  47 49 46 38  ("GIF8")
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return true;
+    // BMP  42 4D  ("BM")
+    if (b[0] === 0x42 && b[1] === 0x4D) return true;
+    // ICO  00 00 01 00
+    if (b[0] === 0x00 && b[1] === 0x00 && b[2] === 0x01 && b[3] === 0x00) return true;
+    // WEBP "RIFF"...."WEBP"
+    if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return true;
+    // WOFF/WOFF2 fonts ("wOFF" / "wOF2")
+    if (b[0] === 0x77 && b[1] === 0x4F && b[2] === 0x46 && (b[3] === 0x46 || b[3] === 0x32)) return true;
+    return false;
+}
+
 // Basic Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -161,11 +191,34 @@ app.use('/tunnel', createProxyMiddleware({
                     }
                 }
 
+                // Binary guard: if the raw bytes are a known image/font format, pass
+                // them through untouched no matter what Content-Type the device claimed.
+                // This is what keeps mislabeled captcha images (served as text/html by
+                // the OLT's CGI) from being mangled by the text rewriters below.
+                if (looksLikeBinaryAsset(responseBuffer)) {
+                    return responseBuffer;
+                }
+
                 const contentType = proxyRes.headers['content-type'] || '';
+
+                // Sniff the actual body so a mislabeled Content-Type can't send a JSON
+                // API response down the HTML path. Embedded OLT httpds routinely return
+                // JSON (e.g. the login captcha: {"code":1,"data":{"captcha":"..."}}) under
+                // Content-Type: text/html or no type at all. If that hits the HTML branch
+                // below, we prepend the shim <script> + <base> to it, JSON.parse() throws
+                // in the SPA, and the captcha (or any API-driven field) silently blanks.
+                // A JS/CSS content-type is trusted over the sniff so a bundle that happens
+                // to start with "{" isn't misrouted.
+                let bodyPeek = responseBuffer.slice(0, 256).toString('utf8').trimStart();
+                if (bodyPeek.charCodeAt(0) === 0xFEFF) bodyPeek = bodyPeek.slice(1).trimStart(); // strip UTF-8 BOM
+                const startsJson = (bodyPeek.charAt(0) === '{' || bodyPeek.charAt(0) === '[') &&
+                    !contentType.includes('javascript') &&
+                    !contentType.includes('ecmascript') &&
+                    !contentType.includes('text/css');
 
                 // HTML: inject <base>, strip CSP meta tags, rewrite absolute attribute URLs,
                 // install a runtime shim. Makes SPAs (React / Vue / Angular) work through the tunnel.
-                if (contentType.includes('text/html') && host) {
+                if (contentType.includes('text/html') && host && !startsJson) {
                     let html = responseBuffer.toString('utf8');
 
                     // Strip CSP meta tags (would block our inline shim script)
@@ -238,8 +291,10 @@ try{var ML=false;var MO=new MutationObserver(function(ms){if(ML)return;ML=true;t
                     return css;
                 }
 
-                // JSON: rewrite device-local absolute paths so embedded API responses stay tunneled
-                if (contentType.includes('application/json') && host) {
+                // JSON: rewrite device-local absolute paths so embedded API responses stay
+                // tunneled. Also handles JSON mislabeled as text/html / text/plain / no type
+                // (startsJson) — those must be rewritten here, never shim-injected as HTML.
+                if (host && (contentType.includes('application/json') || startsJson)) {
                     let text = responseBuffer.toString('utf8');
                     text = text.replace(/"(\/(?:api|static|assets|public|images|img|css|js|fonts|ws|upload|download|file)\/[^"]*)"/g,
                         (_m, p) => `"${prefix}${p}"`);
