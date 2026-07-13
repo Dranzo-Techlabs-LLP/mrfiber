@@ -40,7 +40,12 @@ function looksLikeBinaryAsset(buf) {
 
 // Basic Middleware
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+// IMPORTANT: scope the JSON body parser to /api ONLY. If it runs globally it
+// also consumes the request body of application/json POSTs bound for the
+// /tunnel proxy (e.g. the OLT login) — draining the stream so the proxied
+// request reaches the device with an empty body. The device then rejects it
+// ("parameter error undefined data"). The tunnel must stream bodies verbatim.
+app.use('/api', express.json());
 
 // Routes
 const authRoutes = require('./routes/auth');
