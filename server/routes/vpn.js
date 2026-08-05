@@ -7,9 +7,14 @@ const vpnManager = require('../services/vpnManager');
 router.use(auth);
 
 // GET /api/vpn/profiles
-router.get('/profiles', (req, res) => {
-  const profiles = db.prepare('SELECT id, name, server_address, username FROM vpn_profiles').all();
-  res.json(profiles);
+router.get('/profiles', async (req, res) => {
+  try {
+    const profiles = await db.prepare('SELECT id, name, server_address, username FROM vpn_profiles').all();
+    res.json(profiles);
+  } catch (err) {
+    console.error('[VPN] Failed to list profiles:', err.message);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 // Validates and normalises a profile name for use as a ppp peer filename.
@@ -30,14 +35,14 @@ router.post('/profiles', async (req, res) => {
   try {
     name = sanitiseName(name);
     const stmt = db.prepare('INSERT INTO vpn_profiles (name, server_address, username, password) VALUES (?, ?, ?, ?)');
-    const info = stmt.run(name, server_address, username, password);
+    const info = await stmt.run(name, server_address, username, password);
 
     // Write peer file — error here is fatal: roll back the DB row so the
     // user sees a real error instead of a profile that silently never works.
     try {
       await vpnManager.writeProfileFile({ name, server_address, username, password });
     } catch (peerErr) {
-      db.prepare('DELETE FROM vpn_profiles WHERE id = ?').run(info.lastInsertRowid);
+      await db.prepare('DELETE FROM vpn_profiles WHERE id = ?').run(info.lastInsertRowid);
       return res.status(500).json({ error: `Saved to DB but failed to write peer file: ${peerErr.message}` });
     }
 
@@ -51,7 +56,7 @@ router.post('/profiles', async (req, res) => {
 router.put('/profiles/:id', async (req, res) => {
   let { name, server_address, username, password } = req.body;
   try {
-    const existing = db.prepare('SELECT * FROM vpn_profiles WHERE id = ?').get(req.params.id);
+    const existing = await db.prepare('SELECT * FROM vpn_profiles WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
     name = sanitiseName(name || existing.name);
@@ -65,7 +70,7 @@ router.put('/profiles/:id', async (req, res) => {
     }
 
     const stmt = db.prepare('UPDATE vpn_profiles SET name=?, server_address=?, username=?, password=? WHERE id=?');
-    stmt.run(name, server_address, username, finalPassword, req.params.id);
+    await stmt.run(name, server_address, username, finalPassword, req.params.id);
 
     await vpnManager.writeProfileFile({ name, server_address, username, password: finalPassword });
     res.json({ success: true, id: req.params.id, name });
@@ -77,10 +82,10 @@ router.put('/profiles/:id', async (req, res) => {
 // DELETE /api/vpn/profiles/:id
 router.delete('/profiles/:id', async (req, res) => {
   try {
-    const existing = db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(req.params.id);
+    const existing = await db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Not found' });
 
-    db.prepare('DELETE FROM vpn_profiles WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM vpn_profiles WHERE id = ?').run(req.params.id);
     await vpnManager.deleteProfileFile(existing.name);
     
     res.json({ success: true });
@@ -100,10 +105,10 @@ router.post('/connect', async (req, res) => {
   const { profileId, oltSubnet } = req.body;
   if (!profileId) return res.status(400).json({ error: 'profileId required' });
 
-  const profile = db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(profileId);
-  if (!profile) return res.status(404).json({ error: 'Profile not found' });
-
   try {
+    const profile = await db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(profileId);
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+
     const result = await vpnManager.connectVpn(profile.name, oltSubnet || '192.168.100.0/24');
     res.json(result);
   } catch (err) {
@@ -115,15 +120,16 @@ router.post('/connect', async (req, res) => {
 router.post('/disconnect', async (req, res) => {
   const { profileId } = req.body;
   let profileName = 'Unknown';
-  if (profileId) {
-     const profile = db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(profileId);
-     if (profile) profileName = profile.name;
-  } else {
-     const status = await vpnManager.getVpnStatus();
-     if(status.activeProfile) profileName = status.activeProfile;
-  }
 
   try {
+    if (profileId) {
+      const profile = await db.prepare('SELECT name FROM vpn_profiles WHERE id = ?').get(profileId);
+      if (profile) profileName = profile.name;
+    } else {
+      const status = await vpnManager.getVpnStatus();
+      if (status.activeProfile) profileName = status.activeProfile;
+    }
+
     const result = await vpnManager.disconnectVpn(profileName);
     res.json(result);
   } catch (err) {

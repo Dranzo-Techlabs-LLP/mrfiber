@@ -7,6 +7,16 @@ node_modules/
 **/.env
 *.local
 
+# runtime secrets — plaintext VPN credentials, never commit
+server/chap-secrets
+server/peers/
+**/peers/
+
+# local SQLite database (legacy; contains credentials). App uses MySQL now.
+*.db
+*.db-shm
+*.db-wal
+
 # build output
 dist/
 **/dist/

@@ -7,17 +7,22 @@ const TelnetClient = require('../services/telnetClient');
 router.use(auth);
 
 // GET /api/olt/configs
-router.get('/configs', (req, res) => {
-  const configs = db.prepare('SELECT id, name, ip_address, telnet_port, username FROM olt_configs').all();
-  res.json(configs);
+router.get('/configs', async (req, res) => {
+  try {
+    const configs = await db.prepare('SELECT id, name, ip_address, telnet_port, username FROM olt_configs').all();
+    res.json(configs);
+  } catch (err) {
+    console.error('[OLT] Failed to list configs:', err.message);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 // POST /api/olt/configs
-router.post('/configs', (req, res) => {
+router.post('/configs', async (req, res) => {
   const { name, ip_address, telnet_port, username, password } = req.body;
   try {
     const stmt = db.prepare('INSERT INTO olt_configs (name, ip_address, telnet_port, username, password) VALUES (?, ?, ?, ?, ?)');
-    const info = stmt.run(name, ip_address, telnet_port || 23, username, password);
+    const info = await stmt.run(name, ip_address, telnet_port || 23, username, password);
     res.json({ id: info.lastInsertRowid, name, ip_address });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -25,9 +30,9 @@ router.post('/configs', (req, res) => {
 });
 
 // DELETE /api/olt/configs/:id
-router.delete('/configs/:id', (req, res) => {
+router.delete('/configs/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM olt_configs WHERE id = ?').run(req.params.id);
+    await db.prepare('DELETE FROM olt_configs WHERE id = ?').run(req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -35,14 +40,14 @@ router.delete('/configs/:id', (req, res) => {
 });
 
 // PUT /api/olt/configs/:id
-router.put('/configs/:id', (req, res) => {
+router.put('/configs/:id', async (req, res) => {
   const { name, ip_address, telnet_port, username, password } = req.body;
   try {
-    const existing = db.prepare('SELECT id FROM olt_configs WHERE id = ?').get(req.params.id);
+    const existing = await db.prepare('SELECT id FROM olt_configs WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Config not found' });
-    
+
     const stmt = db.prepare('UPDATE olt_configs SET name=?, ip_address=?, telnet_port=?, username=?, password=? WHERE id=?');
-    stmt.run(name, ip_address, telnet_port || 23, username, password, req.params.id);
+    await stmt.run(name, ip_address, telnet_port || 23, username, password, req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -62,7 +67,13 @@ router.post('/command', async (req, res) => {
     return res.status(403).json({ error: 'explicit confirmRemove required to delete ONT' });
   }
 
-  const config = db.prepare('SELECT * FROM olt_configs WHERE id = ?').get(oltConfigId);
+  let config;
+  try {
+    config = await db.prepare('SELECT * FROM olt_configs WHERE id = ?').get(oltConfigId);
+  } catch (dbErr) {
+    console.error('[OLT] DB lookup failed:', dbErr.message);
+    return res.status(500).json({ error: 'Database error' });
+  }
   if (!config) return res.status(404).json({ error: 'OLT Config not found' });
 
   const isDev = process.env.NODE_ENV !== 'production';

@@ -40,7 +40,10 @@ async function rebuildChapSecrets() {
     // Lazy require — avoids a circular dependency when this module is loaded
     // during DB init, and also means tests don't need a real DB to require it.
     const db = require('../db');
-    const profiles = db.prepare('SELECT username, password FROM vpn_profiles').all();
+    // Wait for the schema to exist — this function is also invoked at startup,
+    // before table creation may have finished.
+    await db.ready;
+    const profiles = await db.prepare('SELECT username, password FROM vpn_profiles').all();
 
     const header = [
         '# /etc/ppp/chap-secrets — managed by Mr.Fiber (do not hand-edit)',
@@ -193,7 +196,7 @@ async function connectVpn(profileName, oltSubnet) {
     } catch(_e) {
         console.log(`[VPN] Peer file missing for "${profileName}" — regenerating from DB.`);
         const db = require('../db');
-        const profile = db.prepare('SELECT name, server_address, username, password FROM vpn_profiles WHERE name = ?').get(profileName);
+        const profile = await db.prepare('SELECT name, server_address, username, password FROM vpn_profiles WHERE name = ?').get(profileName);
         if (!profile) {
             throw new Error(`Peer file not found and no DB record for profile "${profileName}". Re-save the profile in the UI.`);
         }

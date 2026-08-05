@@ -8,6 +8,17 @@ const db = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Safety net: a rejected async DB call that slips past a handler's try/catch
+// must not take the whole server down (Node 15+ terminates on unhandled
+// rejections by default). Log it and keep serving other requests. Individual
+// handlers still own returning the correct HTTP error for their own path.
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err && err.stack ? err.stack : err);
+});
+
 // Detect binary assets by magic number, independent of the (often wrong or
 // missing) Content-Type header. Many embedded OLT httpds serve dynamically
 // generated images — captchas especially, which are usually CGI scripts —
@@ -384,6 +395,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Mr.Fiber API running on port ${PORT}`);
-});
+// Only start accepting requests once the MySQL schema is ready, so no request
+// can race table creation on a cold start.
+db.ready
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Mr.Fiber API running on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('[FATAL] Database initialization failed — server not started:', err.message);
+    process.exit(1);
+  });
