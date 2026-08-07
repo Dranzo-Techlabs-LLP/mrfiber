@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RadioTower, LogIn, Lock } from 'lucide-react';
 import api from '../api/client';
+import { setAuth, firstAccessibleRoute } from '../api/auth';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -17,9 +18,8 @@ export default function Login() {
     
     try {
       const res = await api.post('/auth/login', { username, password });
-      localStorage.setItem('token', res.data.token);
-      localStorage.setItem('username', res.data.username);
-      navigate('/vpn');
+      setAuth(res.data);
+      navigate(firstAccessibleRoute());
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to login');
     } finally {

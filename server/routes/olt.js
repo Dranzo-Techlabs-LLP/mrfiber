@@ -2,9 +2,12 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { requireSection } = require('../middleware/permissions');
 const TelnetClient = require('../services/telnetClient');
 
 router.use(auth);
+// OLT actions issue live telnet commands to devices — gate to the 'olt' section.
+router.use(requireSection('olt'));
 
 // GET /api/olt/configs
 router.get('/configs', async (req, res) => {

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { clearAuth } from './auth';
 
 const api = axios.create({
   baseURL: '/api' // Uses vite proxy in dev, same-origin in prod
@@ -21,8 +22,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('username');
+      clearAuth();
       if (window.location.pathname !== '/login') {
          window.location.href = '/login';
       }

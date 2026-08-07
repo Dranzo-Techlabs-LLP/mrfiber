@@ -69,6 +69,42 @@ function prepare(sql) {
  *                                            prefix length)
  *   - INSERT OR IGNORE                    -> INSERT IGNORE
  */
+// The app's access-controlled sections. A role grants access to a subset of
+// these (the Admin role bypasses the list entirely). Keep this in sync with the
+// frontend nav. `key` is stored in roles.permissions; `label` is for the UI.
+const SECTIONS = [
+  { key: 'vpn', label: 'VPN Base' },
+  { key: 'olt', label: 'OLT Matrix' },
+  { key: 'proxy', label: 'Web Tunnel' },
+  { key: 'customers', label: 'Customers' },
+  { key: 'users', label: 'Users' },
+  { key: 'roles', label: 'Roles & Privileges' },
+];
+const SECTION_KEYS = SECTIONS.map((s) => s.key);
+
+// Default seed roles. Admin is a super-role (is_admin=1) that always has every
+// section, so an admin can never be locked out by a bad permissions list.
+const DEFAULT_ROLES = [
+  { name: 'Admin', description: 'Full access to everything', is_admin: 1, permissions: SECTION_KEYS },
+  { name: 'Manager', description: 'Network + customer management', is_admin: 0, permissions: ['vpn', 'olt', 'proxy', 'customers'] },
+  { name: 'Operator', description: 'Day-to-day OLT & customer work', is_admin: 0, permissions: ['olt', 'proxy', 'customers'] },
+  { name: 'Viewer', description: 'Customer records only', is_admin: 0, permissions: ['customers'] },
+];
+
+// MySQL 8 has no "ADD COLUMN IF NOT EXISTS", so check information_schema first.
+// Lets us evolve the legacy `users` table without a destructive migration.
+async function ensureColumn(table, column, ddl) {
+  const [rows] = await pool.query(
+    `SELECT COUNT(*) AS c FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+    [table, column]
+  );
+  if (rows[0].c === 0) {
+    await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`);
+    console.log(`[DB] Added column ${table}.${column}`);
+  }
+}
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -100,6 +136,42 @@ async function initSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
+  // Roles: name + a JSON array of section keys the role may access.
+  // is_admin=1 is a super-role that bypasses the permissions list.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roles (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(64) NOT NULL UNIQUE,
+      description VARCHAR(255) DEFAULT NULL,
+      is_admin TINYINT(1) NOT NULL DEFAULT 0,
+      permissions JSON DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Customers: fiber subscribers managed as data records (no login).
+  // Minimal field set for now (name / tel_no / port) — extend later.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customers (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      tel_no VARCHAR(64) DEFAULT NULL,
+      port VARCHAR(64) DEFAULT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Extend the legacy users table with profile + role columns (idempotent).
+  await ensureColumn('users', 'role_id', 'role_id INT DEFAULT NULL');
+  await ensureColumn('users', 'full_name', 'full_name VARCHAR(255) DEFAULT NULL');
+  await ensureColumn('users', 'email', 'email VARCHAR(255) DEFAULT NULL');
+  await ensureColumn('users', 'status', "status VARCHAR(32) NOT NULL DEFAULT 'active'");
+  await ensureColumn('users', 'created_at', 'created_at DATETIME DEFAULT CURRENT_TIMESTAMP');
+
+  // Forward-compat for the current customer field set (adds to older tables).
+  await ensureColumn('customers', 'tel_no', 'tel_no VARCHAR(64) DEFAULT NULL');
+  await ensureColumn('customers', 'port', 'port VARCHAR(64) DEFAULT NULL');
+
   // Seed a default admin so a fresh database is immediately usable. This is a
   // safety net; a real admin row is also carried over by the migration script.
   const defaultPass = process.env.ADMIN_DEFAULT_PASSWORD || 'admin123';
@@ -108,6 +180,26 @@ async function initSchema() {
     'INSERT IGNORE INTO users (username, password_hash) VALUES (?, ?)',
     ['admin', hash]
   );
+
+  // Seed the default roles (idempotent).
+  for (const r of DEFAULT_ROLES) {
+    await pool.execute(
+      'INSERT IGNORE INTO roles (name, description, is_admin, permissions) VALUES (?, ?, ?, ?)',
+      [r.name, r.description, r.is_admin, JSON.stringify(r.permissions)]
+    );
+  }
+
+  // Make sure the built-in admin account has the Admin role, and any other
+  // role-less user defaults to Viewer (least privilege) so nobody is left with
+  // a NULL role that would deny everything.
+  const [[adminRole]] = await pool.query("SELECT id FROM roles WHERE name = 'Admin' LIMIT 1");
+  const [[viewerRole]] = await pool.query("SELECT id FROM roles WHERE name = 'Viewer' LIMIT 1");
+  if (adminRole) {
+    await pool.execute('UPDATE users SET role_id = ? WHERE username = ? AND role_id IS NULL', [adminRole.id, 'admin']);
+  }
+  if (viewerRole) {
+    await pool.execute('UPDATE users SET role_id = ? WHERE role_id IS NULL', [viewerRole.id]);
+  }
 
   console.log('[DB] MySQL schema ready');
 }
@@ -120,4 +212,4 @@ const ready = initSchema().catch((err) => {
   throw err;
 });
 
-module.exports = { prepare, pool, ready };
+module.exports = { prepare, pool, ready, SECTIONS, SECTION_KEYS };

@@ -62,10 +62,16 @@ app.use('/api', express.json());
 const authRoutes = require('./routes/auth');
 const vpnRoutes = require('./routes/vpn');
 const oltRoutes = require('./routes/olt');
+const userRoutes = require('./routes/users');
+const customerRoutes = require('./routes/customers');
+const roleRoutes = require('./routes/roles');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/vpn', vpnRoutes);
 app.use('/api/olt', oltRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/roles', roleRoutes);
 
 // WEB TUNNEL PROXY ENGINE
 // Static mount with dynamic router isolates tunnel traffic from local app.
