@@ -405,8 +405,16 @@ app.use((err, req, res, next) => {
 // can race table creation on a cold start.
 db.ready
   .then(() => {
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`Mr.Fiber API running on port ${PORT}`);
+    });
+    // If the port can't be bound (e.g. a stale instance still holds it), exit
+    // so the process manager restarts us cleanly. Swallowing this (via the
+    // uncaughtException handler) would leave a live-but-not-listening zombie
+    // while the old process keeps serving stale code.
+    server.on('error', (err) => {
+      console.error(`[FATAL] Could not bind port ${PORT}:`, err.message);
+      process.exit(1);
     });
   })
   .catch((err) => {

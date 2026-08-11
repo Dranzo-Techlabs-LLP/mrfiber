@@ -75,6 +75,8 @@ function prepare(sql) {
 const SECTIONS = [
   { key: 'vpn', label: 'VPN Base' },
   { key: 'olt', label: 'OLT Matrix' },
+  // Destructive OLT action, granted separately from general OLT access.
+  { key: 'olt_remove_ont', label: 'Remove existing ONT' },
   { key: 'proxy', label: 'Web Tunnel' },
   { key: 'customers', label: 'Customers' },
   { key: 'users', label: 'Users' },

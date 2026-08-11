@@ -3,6 +3,7 @@ import { Terminal, Activity, Trash2, ShieldAlert, Cpu, Save, Search, Settings, E
 import api from '../api/client';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { hasSection } from '../api/auth';
 
 function cn(...inputs) {
   return twMerge(clsx(inputs));
@@ -213,6 +214,9 @@ export default function OltMonitor() {
   // Delete State
   const [delPort, setDelPort] = useState('');
 
+  // "Remove existing ONT" is a separately-grantable, destructive privilege.
+  const canRemoveOnt = hasSection('olt_remove_ont');
+
   const fetchData = async () => {
     try {
       const [confRes, statusRes] = await Promise.all([
@@ -345,9 +349,11 @@ export default function OltMonitor() {
                  <button onClick={()=>setActiveTab('configure')} className={cn("w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium", activeTab === 'configure' ? 'bg-primary/20 text-primary' : 'text-white/60 hover:bg-white/5 hover:text-white')}>
                      <Settings className="w-5 h-5"/><span>Configure new ONT</span>
                  </button>
-                 <button onClick={()=>setActiveTab('delete')} className={cn("w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium text-red-400", activeTab === 'delete' ? 'bg-red-500/20 text-red-500' : 'hover:bg-red-500/10 hover:text-red-400')}>
+                 {canRemoveOnt && (
+                   <button onClick={()=>setActiveTab('delete')} className={cn("w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition font-medium text-red-400", activeTab === 'delete' ? 'bg-red-500/20 text-red-500' : 'hover:bg-red-500/10 hover:text-red-400')}>
                      <Trash2 className="w-5 h-5"/><span>Remove existing ONT</span>
-                 </button>
+                   </button>
+                 )}
              </nav>
          </div>
 
@@ -426,7 +432,7 @@ export default function OltMonitor() {
                     </form>
                 )}
 
-                {activeTab === 'delete' && (
+                {activeTab === 'delete' && canRemoveOnt && (
                     <form onSubmit={handleDelete} className="space-y-6">
                         <div>
                             <h2 className="text-xl font-bold text-red-500 mb-2">Remove existing ONT</h2>

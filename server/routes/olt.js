@@ -65,6 +65,16 @@ router.post('/command', async (req, res) => {
     return res.status(400).json({ error: 'oltConfigId and action required' });
   }
 
+  // Removing an ONT is a separately-granted, destructive privilege on top of
+  // general OLT access. req.access is populated by requireSection('olt').
+  if (action === 'remove_ont') {
+    const access = req.access || {};
+    const allowed = access.isAdmin || (Array.isArray(access.sections) && access.sections.includes('olt_remove_ont'));
+    if (!allowed) {
+      return res.status(403).json({ error: 'Your role does not permit removing ONTs' });
+    }
+  }
+
   // Safety check for remove
   if (action === 'remove_ont' && confirmRemove !== true) {
     return res.status(403).json({ error: 'explicit confirmRemove required to delete ONT' });
